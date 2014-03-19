@@ -12,6 +12,7 @@
 ## _____________________________ ##
 6 ## Length of control options vector
 
+<<<<<<< Updated upstream:examples/ArrowtoothFlounder/DATA/arf.pfc
 1968 ## - 1) Start year for mean natural mortality rate
 1979 ## - 2) Last year for mean natural mortality rate
 
@@ -20,6 +21,16 @@
 
 1968 ## - 5) Start year for average recruitment period in projections.
 1979 ## - 6) End year for average recruitment period in projections.
+=======
+1963 ## - 1) Start year for mean natural mortality rate
+2013 ## - 2)  Last year for mean natural mortality rate
+
+1963 ## - 3) Start year for average fecundity/weight-at-age in projections
+2013 ## - 4)  Last year for average fecundity/weight-at-age in projections
+
+1963 ## - 5) Start year for average recruitment period in projections.
+2013 ## - 6)   End year for average recruitment period in projections.
+>>>>>>> Stashed changes:examples/ArrowtoothFlounder/arf.pfc
 
 ## eof
 -999
