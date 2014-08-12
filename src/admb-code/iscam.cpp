@@ -685,6 +685,8 @@ model_data::model_data(int argc,char * argv[]) : ad_comm(argc,argv)
 		ipar_vector(6,7) = ngroup;
 		ipar_vector(3)   = n_gs;
 		ipar_vector(4,5) = n_ag;
+		ipar_vector(8)   = n_gs;
+		
   nCompIndex.allocate(1,nAgears,"nCompIndex");
   nCompLikelihood.allocate(1,nAgears,"nCompLikelihood");
   dMinP.allocate(1,nAgears,"dMinP");
@@ -808,7 +810,7 @@ model_data::model_data(int argc,char * argv[]) : ad_comm(argc,argv)
   fitMeanWt.allocate("fitMeanWt");
   nMeanWtCV.allocate("nMeanWtCV");
   weight_sig.allocate(1,nMeanWtCV,"weight_sig");
-  d_iscamCntrl.allocate(1,15,"d_iscamCntrl");
+  d_iscamCntrl.allocate(1,16,"d_iscamCntrl");
   eofc.allocate("eofc");
 		verbose = d_iscamCntrl(1);
 		if(verbose) COUT(d_iscamCntrl);
@@ -983,6 +985,10 @@ gamma_r = 0;
   #ifndef NO_AD_INITIALIZE
     m.initialize();
   #endif
+  mzero.allocate(1,n_gs,"mzero");
+  #ifndef NO_AD_INITIALIZE
+    mzero.initialize();
+  #endif
   log_avgrec.allocate(1,n_ag,"log_avgrec");
   #ifndef NO_AD_INITIALIZE
     log_avgrec.initialize();
@@ -1050,6 +1056,10 @@ gamma_r = 0;
   bt.allocate(1,ngroup,syr,nyr+1,"bt");
   #ifndef NO_AD_INITIALIZE
     bt.initialize();
+  #endif
+  bt_sex.allocate(1,nsex,syr,nyr+1,"bt_sex");
+  #ifndef NO_AD_INITIALIZE
+    bt_sex.initialize();
   #endif
   rt.allocate(1,ngroup,syr+sage,nyr,"rt");
   #ifndef NO_AD_INITIALIZE
@@ -1228,6 +1238,7 @@ void model_parameters::initParameters()
 	ro        = mfexp(theta(1));
 	steepness = theta(2);
 	m         = mfexp(theta(3));
+	mzero     = mfexp(theta(8));
 	rho       = theta(6);
 	varphi    = sqrt(1.0/theta(7));
 	sig       = elem_prod(sqrt(rho) , varphi);
@@ -1677,6 +1688,7 @@ void model_parameters::calcNumbersAtAge(void)
 	int ig,ih;
 	N.initialize();
 	bt.initialize();
+	bt_sex.initialize();
 	for(ig=1;ig<=n_ags;ig++)
 	{
 		f  = n_area(ig);
@@ -1702,18 +1714,57 @@ void model_parameters::calcNumbersAtAge(void)
 		}
 		N(ig)(syr)(sage,nage) = 1./nsex * mfexp(tr);
 		log_rt(ih)(syr-nage+sage,syr) = tr.shift(syr-nage+sage);
+		// average biomass for group in year syr
+		bt(g)(syr) += N(ig)(syr) * d3_wt_avg(ig)(syr);
+		// average biomass for sex in year i
+		bt_sex(ig)(syr)+= N(ig)(syr) * d3_wt_avg(ig)(syr);
 		for(i=syr;i<=nyr;i++)
 		{
 			if( i>syr )
 			{
 				log_rt(ih)(i) = (log_avgrec(ih)+log_rec_devs(ih)(i));
-				N(ig)(i,sage) = 1./nsex * mfexp( log_rt(ih)(i) );				
+				N(ig)(i,sage) = 1./nsex * mfexp( log_rt(ih)(i) );
+				// average biomass for group in year i
+				bt(g)(i) += N(ig)(i) * d3_wt_avg(ig)(i);
+				// average biomass for sex in year i
+				bt_sex(ig)(i)+= N(ig)(i) * d3_wt_avg(ig)(i);
+				//If density-dependent mortality, =======================
+		   		//  -- update M and replace S(i) with an S(i) that accounts for density-dependent effects
+				if (d_iscamCntrl(16))
+				{
+				   if (d_iscamCntrl(5) && d_iscamCntrl(10)<0)
+				   {			
+				    	// re-caculate M using density-dependent relationship:
+				    	if (nsex == 2) // for 2-sex case, where bt should combine both sexes
+				    	{ 
+				           if (ig == 2) // if bt_sex has already been calculated for both males and females:
+				           {
+				              M(1,i)= M(1,i) + (mzero(1)-M(1,i))*(1 - (colsum(bt_sex)(i) / colsum(bt_sex)(syr)));
+					      M(2,i)= M(2,i) + (mzero(2)-M(2,i))*(1 - (colsum(bt_sex)(i) / colsum(bt_sex)(syr)));
+					      // update S based on new M:
+					      Z(1)=M(1)+F(1);
+		     		    	      S(1)=mfexp(-Z(1));	
+		     		    	      Z(2)=M(2)+F(2);
+		     		    	      S(2)=mfexp(-Z(2));
+		     		    	   }
+		     		    	 }
+		     		    	 if (nsex == 1)  // for single-sex case
+		     		    	 {
+		     		    	    M(ig,i)= M(ig,i) + (mzero(ig)-M(ig,i))*(1 - (colsum(bt_sex)(i) / colsum(bt_sex)(syr)));
+		     		    	    Z(ig)=M(ig)+F(ig);
+		     		    	    S(ig)=mfexp(-Z(ig));
+		     		    	 }
+				}
+				else
+				{
+					cout<<"Density-dependent mortality cannot currently be used if population starts at unfished equilibrium and / or M deviations are used"<<endl;
+					exit(1);
+				}
 			}
-			N(ig)(i+1)(sage+1,nage) =++elem_prod(N(ig)(i)(sage,nage-1)
+		      }
+		      N(ig)(i+1)(sage+1,nage) =++elem_prod(N(ig)(i)(sage,nage-1)
 			                                     ,S(ig)(i)(sage,nage-1));
-			N(ig)(i+1,nage)        +=  N(ig)(i,nage)*S(ig)(i,nage);
-			// average biomass for group in year i
-			bt(g)(i) += N(ig)(i) * d3_wt_avg(ig)(i);
+		      N(ig)(i+1,nage)        +=  N(ig)(i,nage)*S(ig)(i,nage);
 		}
 		N(ig)(nyr+1,sage) = 1./nsex * mfexp( log_avgrec(ih));
 		bt(g)(nyr+1) += N(ig)(nyr+1) * d3_wt_avg(ig)(nyr+1);
@@ -2130,11 +2181,26 @@ void model_parameters::calcStockRecruitment()
 			for(h=1;h<=nsex;h++)
 			{
 				ig = pntr_ags(f,g,h);
-				// | Step 1. average natural mortality rate at age.
+				// | Step 1. average natural mortality rate at age (or, natural mortality at carrying capacity if density-dependent mortality).
 				// | Step 2. calculate survivorship
 				for(j=sage;j<=nage;j++)
 				{
-					ma(j) = mean(trans(M(ig))(j));
+				        // for cases with density-dependent mortality:
+					if (d_iscamCntrl(16))
+					{
+					   if (d_iscamCntrl(5))
+					   {
+					 	  ma(j) = m(ig);
+					   }
+					   else
+					   {
+					        cout<<"Cannot use density-dependent M if population is not assumed to be at unfished equilibrium at this time ..."<<endl;
+					   }
+					}
+					else
+					{
+					   ma(j) = mean(trans(M(ig))(j));
+					}
 					fa(j) = mean( trans(d3_wt_mat(ig))(j) );
 					if(j > sage)
 					{
@@ -2385,13 +2451,13 @@ void model_parameters::calcObjectiveFunction(void)
 					//logistic_normal cLN_Age( O,P,dMinP(k),dEps(k) );
 					if( active(phi1(k)) && !active(phi2(k)) )  // LN2 Model
 					{
-            cout<<endl;
-            cout<<"        log_age_tau2: "<<log_age_tau2<<endl;
-            cout<<"                   k: "<<k<<endl;
-            cout<<"     log_age_tau2(k): "<<log_age_tau2(k)<<endl;
-            cout<<"exp(log_age_tau2(k)): "<<exp(log_age_tau2(k))<<endl;
-            cout<<"             phi2(k): "<<phi2(k)<<endl;
-            cout<<" cLN_Age(expk,phi2k): "<<cLN_Age(exp(log_age_tau2(k)))<<endl<<endl;
+            //cout<<endl;
+            //cout<<"        log_age_tau2: "<<log_age_tau2<<endl;
+            //cout<<"                   k: "<<k<<endl;
+            //cout<<"     log_age_tau2(k): "<<log_age_tau2(k)<<endl;
+            //cout<<"exp(log_age_tau2(k)): "<<exp(log_age_tau2(k))<<endl;
+            //cout<<"             phi2(k): "<<phi2(k)<<endl;
+            //cout<<" cLN_Age(expk,phi2k): "<<cLN_Age(exp(log_age_tau2(k)))<<endl<<endl;
 						nlvec(3,k)   = cLN_Age(exp(log_age_tau2(k)),phi1(k));
 					}
 					if( active(phi1(k)) && active(phi2(k)) )   // LN3 Model

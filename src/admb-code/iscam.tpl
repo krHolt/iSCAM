@@ -968,11 +968,12 @@ DATA_SECTION
 	// | ipar_vector     -> integer vector based on the number of areas groups sexes
 	// | -1) log_ro      - unfished sage recruitment
 	// | -2) steepness   - steepness of the stock-recruitment relationship
-	// | -3) log_m       - instantaneous natural mortality rate
+	// | -3) log_m       - instantaneous natural mortality rate at carrying capacity
 	// | -4) log_avgrec  - average sage recruitment from syr+1 to nyr
 	// | -5) log_recinit - average sage recruitment for initialization
 	// | -6) rho         - proportion of total variance for observation errors
 	// | -7) vartheta    - total precision (1/variance)
+	// | -8) log_mzero    - instantaneous natural mortality rate at zero abundance
 	init_int npar;
 	init_matrix theta_control(1,npar,1,7);
 	
@@ -992,6 +993,8 @@ DATA_SECTION
 		ipar_vector(6,7) = ngroup;
 		ipar_vector(3)   = n_gs;
 		ipar_vector(4,5) = n_ag;
+		ipar_vector(8)   = n_gs;
+		
 	END_CALCS
 	
 	// |---------------------------------------------------------------------------------|
@@ -1212,7 +1215,8 @@ DATA_SECTION
 	// | 13-> fraction of total mortality that takes place prior to spawning
 	// | 14-> number of prospective years to start estimation from syr.
 	// | 15-> switch for generating selex based on IFD and cohort biomass
-	init_vector d_iscamCntrl(1,15);
+	// | 16-> switch for density-dependent mortality
+	init_vector d_iscamCntrl(1,16);
 	int verbose;
 	init_int eofc;
 	LOC_CALCS
@@ -1385,7 +1389,7 @@ PARAMETER_SECTION
 	// | theta[5] -> log_recinit
 	// | theta[6] -> rho
 	// | theta[7] -> vartheta
-	// |
+	// | theta[8] -> log_mzero
 	init_bounded_vector_vector theta(1,npar,1,ipar_vector,theta_lb,theta_ub,theta_phz);
 
 	// |---------------------------------------------------------------------------------|
@@ -1549,6 +1553,7 @@ PARAMETER_SECTION
 	vector        so(1,ngroup);
 	vector      beta(1,ngroup);
 	vector           m(1,n_gs);	
+	vector           mzero(1,n_gs);
 	vector  log_avgrec(1,n_ag);			
 	vector log_recinit(1,n_ag);			
 	vector          q(1,nItNobs);
@@ -1572,6 +1577,7 @@ PARAMETER_SECTION
 	// | - qt       -> catchability coefficients (time-varying)
 	// | - sbt      -> spawning stock biomass by group used in S-R relationship.
 	// | - bt       -> average biomass by group used for stock projection
+	// | - bt_sex       -> average biomass by sex; used for density-dependent mortality
 	// | - rt          -> predicted sage-recruits based on S-R relationship.
 	// | - delta       -> residuals between estimated R and R from S-R curve (process err)
 	// | - annual_mean_weight    ->  ragged matrix of estimated annual mean weights for each gear with empirical annual mean weight observations  //START_RF_ADD   END_RF_ADD    RF ADDED THIS FOR TESTING WITH PACIFIC COD DATA
@@ -1588,6 +1594,7 @@ PARAMETER_SECTION
 	matrix      qt(1,nItNobs,1,n_it_nobs);
 	matrix     sbt(1,ngroup,syr,nyr+1);
 	matrix      bt(1,ngroup,syr,nyr+1);
+	matrix      bt_sex(1,nsex,syr,nyr+1);
 	matrix      rt(1,ngroup,syr+sage,nyr); 
 	matrix   delta(1,ngroup,syr+sage,nyr);
 	matrix   annual_mean_weight(1,nMeanWt,1,nMeanWtNobs);
@@ -1778,6 +1785,7 @@ FUNCTION void initParameters()
 	ro        = mfexp(theta(1));
 	steepness = theta(2);
 	m         = mfexp(theta(3));
+	mzero     = mfexp(theta(8));
 	rho       = theta(6);
 	varphi    = sqrt(1.0/theta(7));
 	sig       = elem_prod(sqrt(rho) , varphi);
@@ -2301,10 +2309,12 @@ FUNCTION calcNumbersAtAge
 
 	N.initialize();
 	bt.initialize();
+	bt_sex.initialize();
 	for(ig=1;ig<=n_ags;ig++)
 	{
 		f  = n_area(ig);
 		g  = n_group(ig);
+		
 		ih = pntr_ag(f,g);
 
 		dvar_vector lx(sage,nage);
@@ -2329,25 +2339,72 @@ FUNCTION calcNumbersAtAge
 		N(ig)(syr)(sage,nage) = 1./nsex * mfexp(tr);
 		log_rt(ih)(syr-nage+sage,syr) = tr.shift(syr-nage+sage);
 
-
+		// average biomass for group in year syr
+		bt(g)(syr) += N(ig)(syr) * d3_wt_avg(ig)(syr);
+		// average biomass for sex in year i
+		bt_sex(ig)(syr)+= N(ig)(syr) * d3_wt_avg(ig)(syr);
+ 
 		for(i=syr;i<=nyr;i++)
 		{
 			if( i>syr )
 			{
 				log_rt(ih)(i) = (log_avgrec(ih)+log_rec_devs(ih)(i));
-				N(ig)(i,sage) = 1./nsex * mfexp( log_rt(ih)(i) );				
+				N(ig)(i,sage) = 1./nsex * mfexp( log_rt(ih)(i) );
+				// average biomass for group in year i
+				bt(g)(i) += N(ig)(i) * d3_wt_avg(ig)(i);
+				// average biomass for sex in year i
+				bt_sex(ig)(i)+= N(ig)(i) * d3_wt_avg(ig)(i);
+
+
+				//If density-dependent mortality, =======================
+		   		//  -- update M and replace S(i) with an S(i) that accounts for density-dependent effects
+			
+				if (d_iscamCntrl(16))
+				{
+				   if (d_iscamCntrl(5) && d_iscamCntrl(10)<0)
+				   {			
+				    	// re-caculate M using density-dependent relationship:
+				    	if (nsex == 2) // for 2-sex case, where bt should combine both sexes
+				    	{ 
+				           if (ig == 2) // if bt_sex has already been calculated for both males and females:
+				           {
+				              M(1,i)= M(1,i) + (mzero(1)-M(1,i))*(1 - (colsum(bt_sex)(i) / colsum(bt_sex)(syr)));
+					      M(2,i)= M(2,i) + (mzero(2)-M(2,i))*(1 - (colsum(bt_sex)(i) / colsum(bt_sex)(syr)));
+					 
+					      // update S based on new M:
+					      Z(1)=M(1)+F(1);
+		     		    	      S(1)=mfexp(-Z(1));	
+		     		    	   
+		     		    	      Z(2)=M(2)+F(2);
+		     		    	      S(2)=mfexp(-Z(2));
+		     		    	   }
+		     		    	 }
+		     		    	 if (nsex == 1)  // for single-sex case
+		     		    	 {
+		     		    	    M(ig,i)= M(ig,i) + (mzero(ig)-M(ig,i))*(1 - (colsum(bt_sex)(i) / colsum(bt_sex)(syr)));
+		     		    	    Z(ig)=M(ig)+F(ig);
+		     		    	    S(ig)=mfexp(-Z(ig));
+		     		    	 }
+		           
+				}
+				else
+				{
+					cout<<"Density-dependent mortality cannot currently be used if population starts at unfished equilibrium and / or M deviations are used"<<endl;
+					exit(1);
+				}
 			}
+		      
+		      }
 
-			N(ig)(i+1)(sage+1,nage) =++elem_prod(N(ig)(i)(sage,nage-1)
+		      N(ig)(i+1)(sage+1,nage) =++elem_prod(N(ig)(i)(sage,nage-1)
 			                                     ,S(ig)(i)(sage,nage-1));
-			N(ig)(i+1,nage)        +=  N(ig)(i,nage)*S(ig)(i,nage);
+		      N(ig)(i+1,nage)        +=  N(ig)(i,nage)*S(ig)(i,nage);
 
-			// average biomass for group in year i
-			bt(g)(i) += N(ig)(i) * d3_wt_avg(ig)(i);
 		}
 		N(ig)(nyr+1,sage) = 1./nsex * mfexp( log_avgrec(ih));
 		bt(g)(nyr+1) += N(ig)(nyr+1) * d3_wt_avg(ig)(nyr+1);
 	}
+	
 	if(verbose)cout<<"**** Ok after calcNumbersAtAge ****"<<endl;	
   }
 
@@ -2822,11 +2879,28 @@ FUNCTION void calcStockRecruitment()
 			{
 				ig = pntr_ags(f,g,h);
 
-				// | Step 1. average natural mortality rate at age.
+				// | Step 1. average natural mortality rate at age (or, natural mortality at carrying capacity if density-dependent mortality).
 				// | Step 2. calculate survivorship
 				for(j=sage;j<=nage;j++)
 				{
-					ma(j) = mean(trans(M(ig))(j));
+				        // for cases with density-dependent mortality:
+					if (d_iscamCntrl(16))
+					{
+					   
+					   if (d_iscamCntrl(5))
+					   {
+					 	  ma(j) = m(ig);
+					   }
+					   else
+					   {
+					        cout<<"Cannot use density-dependent M if population is not assumed to be at unfished equilibrium at this time ..."<<endl;
+					   }
+					}
+					else
+					{
+					   ma(j) = mean(trans(M(ig))(j));
+					}
+					
 					fa(j) = mean( trans(d3_wt_mat(ig))(j) );
 					if(j > sage)
 					{
