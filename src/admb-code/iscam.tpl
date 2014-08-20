@@ -1185,7 +1185,12 @@ DATA_SECTION
 	init_ivector q_prior(1,nits);
 	init_vector mu_log_q(1,nits);
 	init_vector sd_log_q(1,nits);
-
+	// |---------------------------------------------------------------------------------|
+		// | DENSITY-DEPENDENT Q
+	// |---------------------------------------------------------------------------------|
+	init_ivector dens_q_switch(1,nits);
+	init_vector dens_q_pow(1,nits);
+	//
 	// |---------------------------------------------------------------------------------|
 	// | ## CONTROLS FOR FITTING TO MEAN WEIGHT DATA	  //START_RF_ADD
 	// | ## RF added this for testing with Pacific Cod data 
@@ -2730,6 +2735,7 @@ FUNCTION calcSurveyObservations
 		V.initialize();
 		nz = 0;
 		int iz=1;  // index for first year of data for prospective analysis.
+		
 		for(ii=1;ii<=n_it_nobs(kk);ii++)
 		{
 			i    = d3_survey_data(kk)(ii)(1);
@@ -2759,6 +2765,7 @@ FUNCTION calcSurveyObservations
 				va  = mfexp( log_sel(k)(ig)(i) );
 				sa  = mfexp( -Z(ig)(i)*di );
 				Na  = elem_prod(N(ig)(i),sa);
+				
 				switch(n_survey_type(kk))
 				{
 					case 1:
@@ -2778,10 +2785,16 @@ FUNCTION calcSurveyObservations
 		dvector     wt = trans(d3_survey_data(kk))(7)(iz,nz);
 		            wt = wt/sum(wt);
 		dvar_vector t1 = rowsum(V);
+		
+		// Adjustment to vulnerable biomass is density-dependent q is used (Added by K.Holt)
+		if (dens_q_switch(kk) == 1)
+		{	
+			t1 = pow(t1,dens_q_pow(kk));
+		}
+		
 		dvar_vector zt = log(it) - log(t1(iz,nz));
 		dvariable zbar = sum(elem_prod(zt,wt));
 				 q(kk) = mfexp(zbar);
-	
 
 		// | survey residuals
 		epsilon(kk).sub(iz,nz) = zt - zbar;

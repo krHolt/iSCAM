@@ -807,6 +807,8 @@ model_data::model_data(int argc,char * argv[]) : ad_comm(argc,argv)
   q_prior.allocate(1,nits,"q_prior");
   mu_log_q.allocate(1,nits,"mu_log_q");
   sd_log_q.allocate(1,nits,"sd_log_q");
+  dens_q_switch.allocate(1,nits,"dens_q_switch");
+  dens_q_pow.allocate(1,nits,"dens_q_pow");
   fitMeanWt.allocate("fitMeanWt");
   nMeanWtCV.allocate("nMeanWtCV");
   weight_sig.allocate(1,nMeanWtCV,"weight_sig");
@@ -2098,6 +2100,11 @@ void model_parameters::calcSurveyObservations(void)
 		dvector     wt = trans(d3_survey_data(kk))(7)(iz,nz);
 		            wt = wt/sum(wt);
 		dvar_vector t1 = rowsum(V);
+		// Adjustment to vulnerable biomass is density-dependent q is used (Added by K.Holt)
+		if (dens_q_switch(kk) == 1)
+		{	
+			t1 = pow(t1,dens_q_pow(kk));
+		}
 		dvar_vector zt = log(it) - log(t1(iz,nz));
 		dvariable zbar = sum(elem_prod(zt,wt));
 				 q(kk) = mfexp(zbar);
