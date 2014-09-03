@@ -4718,6 +4718,16 @@ REPORT_SECTION
 	// | SELECTIVITIES (4darray)
 	// |---------------------------------------------------------------------------------|
 	// |
+	report<<"sel_par"<<endl;
+	for(k=1;k<=ngear;k++)
+	{	
+	  for (j=1;j<=jsel_npar(k);j++)
+	  {
+		report<<k<<"\t"<<j<<"\t"<<exp(sel_par(k)(j))<<endl;
+	  }
+	}	
+
+	
 	report<<"log_sel"<<endl;
 	for(k=1;k<=ngear;k++)
 	{
